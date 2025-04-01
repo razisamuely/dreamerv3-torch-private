@@ -60,3 +60,10 @@ class MemoryMaze:
         obs["is_last"] = False
         obs["is_terminal"] = False
         return obs
+
+if __name__ == '__main__':
+    env = MemoryMaze("9x9")
+    print(env.observation_space)
+    print(env.action_space)
+    print(env.reset())
+    print(env)

@@ -106,3 +106,7 @@ class DeepMindLabyrinth(object):
             image = self._env.observations()["RGB_INTERLEAVED"]
         self._last_image = image
         return {"image": image}
+
+if __name__ == "__main__":
+    env = DeepMindLabyrinth("lt_chasm", "train", seed=42)
+    print(env.observation)

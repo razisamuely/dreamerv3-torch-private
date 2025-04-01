@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import numpy as np
 
 
@@ -38,10 +38,11 @@ class Atari:
             from PIL import Image
 
             self._image = Image
-        import gym.envs.atari
-
+        
+        # Convert game name to proper format for Gymnasium
         if name == "james_bond":
             name = "jamesbond"
+        
         self._repeat = action_repeat
         self._size = size
         self._gray = gray
@@ -50,15 +51,29 @@ class Atari:
         self._sticky = sticky
         self._length = length
         self._random = np.random.RandomState(seed)
+        
         with self.LOCK:
-            self._env = gym.envs.atari.AtariEnv(
-                game=name,
-                obs_type="image",
-                frameskip=1,
-                repeat_action_probability=0.25 if sticky else 0.0,
-                full_action_space=(actions == "all"),
-            )
+            # Use ALE namespace format for Gymnasium
+            env_name = f"ALE/{name.capitalize()}-v5"
+            try:
+                self._env = gym.make(
+                    env_name,
+                    obs_type="rgb",
+                    frameskip=1,
+                    repeat_action_probability=0.25 if sticky else 0.0,
+                    full_action_space=(actions == "all"),
+                    render_mode=None
+                )
+            except (gym.error.NamespaceNotFound, gym.error.NameNotFound) as e:
+                print(f"\nError: {e}")
+                print("\nTo fix this, you need to install the Atari environments package:")
+                print("pip install 'gymnasium[atari]'")
+                print("pip install 'gymnasium[accept-rom-license]'")
+                raise
+        
+        # Make sure NOOP is the first action
         assert self._env.unwrapped.get_action_meanings()[0] == "NOOP"
+        
         shape = self._env.observation_space.shape
         self._buffer = [np.zeros(shape, np.uint8) for _ in range(2)]
         self._ale = self._env.unwrapped.ale
@@ -73,6 +88,9 @@ class Atari:
         return gym.spaces.Dict(
             {
                 "image": gym.spaces.Box(0, 255, img_shape, np.uint8),
+                "is_first": gym.spaces.Box(0, 1, (), dtype=bool),
+                "is_last": gym.spaces.Box(0, 1, (), dtype=bool),
+                "is_terminal": gym.spaces.Box(0, 1, (), dtype=bool),
             }
         )
 
@@ -83,18 +101,13 @@ class Atari:
         return space
 
     def step(self, action):
-        # if action['reset'] or self._done:
-        #   with self.LOCK:
-        #     self._reset()
-        #   self._done = False
-        #   self._step = 0
-        #   return self._obs(0.0, is_first=True)
         total = 0.0
         dead = False
-        if len(action.shape) >= 1:
+        if isinstance(action, np.ndarray) and len(action.shape) >= 1:
             action = np.argmax(action)
         for repeat in range(self._repeat):
-            _, reward, over, info = self._env.step(action)
+            obs, reward, terminated, truncated, info = self._env.step(action)
+            over = terminated or truncated
             self._step += 1
             total += reward
             if repeat == self._repeat - 2:
@@ -118,20 +131,19 @@ class Atari:
         )
 
     def reset(self):
-        self._env.reset()
+        obs, info = self._env.reset()
         if self._noops:
             for _ in range(self._random.randint(self._noops)):
-                _, _, dead, _ = self._env.step(0)
-                if dead:
-                    self._env.reset()
+                obs, reward, terminated, truncated, info = self._env.step(0)
+                if terminated or truncated:
+                    obs, info = self._env.reset()
         self._last_lives = self._ale.lives()
         self._screen(self._buffer[0])
         self._buffer[1].fill(0)
 
         self._done = False
         self._step = 0
-        obs, reward, is_terminal, _ = self._obs(0.0, is_first=True)
-        return obs
+        return self._obs(0.0, is_first=True)[0]
 
     def _obs(self, reward, is_first=False, is_last=False, is_terminal=False):
         np.maximum(self._buffer[0], self._buffer[1], out=self._buffer[0])
@@ -150,14 +162,39 @@ class Atari:
             image = np.tensordot(image, weights, (-1, 0)).astype(image.dtype)
             image = image[:, :, None]
         return (
-            {"image": image, "is_terminal": is_terminal, "is_first": is_first},
+            {"image": image, "is_terminal": is_terminal, "is_first": is_first, "is_last": is_last},
             reward,
             is_last,
             {},
         )
 
     def _screen(self, array):
-        self._ale.getScreenRGB2(array)
+        array[:] = self._env.render()
 
     def close(self):
         return self._env.close()
+    
+
+if __name__ == "__main__":
+    print("Testing Atari environments with Gymnasium...")
+    
+    try:
+        # Try a simple environment first
+        atari_env = Atari("pong", size=(64, 64))
+        print("Successfully created Pong environment")
+        print(f"Observation space: {atari_env.observation_space}")
+        obs = atari_env.reset()
+        print(f"Reset observation shape: {obs['image'].shape}")
+        atari_env.close()
+        
+        # Try another game
+        atari_env = Atari("breakout", size=(64, 64))
+        print("Successfully created Breakout environment")
+        print(f"Observation space: {atari_env.observation_space}")
+        atari_env.close()
+        
+    except Exception as e:
+        print(f"\nError: {e}")
+        print("\nTo use Atari environments with Gymnasium, install these packages:")
+        print("pip install 'gymnasium[atari]'")
+        print("pip install 'gymnasium[accept-rom-license]'")

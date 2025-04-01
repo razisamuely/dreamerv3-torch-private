@@ -75,3 +75,6 @@ class DeepMindControl:
         if kwargs.get("mode", "rgb_array") != "rgb_array":
             raise ValueError("Only render mode 'rgb_array' is supported.")
         return self._env.physics.render(*self._size, camera_id=self._camera)
+    
+    def close(self):
+        self._env.close()

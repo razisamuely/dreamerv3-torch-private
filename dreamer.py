@@ -193,8 +193,28 @@ def make_env(config, mode, id):
 
         env = minecraft.make_env(task, size=config.size, break_speed=config.break_speed)
         env = wrappers.OneHotAction(env)
+    elif suite == "vmas":
+        if "spread" in task:
+            from envs.vmas_simple_spread import VmasSpread
+            # Use getattr instead of get for Namespace objects
+            n_agents = getattr(config, 'n_agents', 2)
+            env = VmasSpread(
+                task, config.action_repeat, config.size, seed=config.seed + id, device=config.device,
+                n_agents=n_agents
+            )
+        else:
+            import envs.vmas_simple as vmas
+            # Use getattr instead of get for Namespace objects
+            n_agents = getattr(config, 'n_agents', 1)
+            env = vmas.Vmas(
+                task, config.action_repeat, config.size, seed=config.seed + id, device=config.device,
+                n_agents=n_agents
+            )
+        env = wrappers.NormalizeActions(env)
+
     else:
         raise NotImplementedError(suite)
+    
     env = wrappers.TimeLimit(env, config.time_limit)
     env = wrappers.SelectAction(env, key="action")
     env = wrappers.UUID(env)
@@ -307,7 +327,7 @@ def main(config):
             tools.simulate(
                 eval_policy,
                 eval_envs,
-                eval_eps,
+                eval_eps, # This pointer is get updated
                 config.evaldir,
                 logger,
                 is_eval=True,
@@ -363,3 +383,8 @@ if __name__ == "__main__":
         arg_type = tools.args_type(value)
         parser.add_argument(f"--{key}", type=arg_type, default=arg_type(value))
     main(parser.parse_args(remaining))
+
+
+# python dreamer.py --configs vmas --task vmas_simple --logdir ./logdir/vmas_simple
+# python dreamer.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread
+# python dreamer.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread

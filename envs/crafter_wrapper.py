@@ -19,9 +19,9 @@ class Crafter:
             "image": gym.spaces.Box(
                 0, 255, self._env.observation_space.shape, dtype=np.uint8
             ),
-            "is_first": gym.spaces.Box(-np.inf, np.inf, (1,), dtype=np.uint8),
-            "is_last": gym.spaces.Box(-np.inf, np.inf, (1,), dtype=np.uint8),
-            "is_terminal": gym.spaces.Box(-np.inf, np.inf, (1,), dtype=np.uint8),
+            "is_first": gym.spaces.Box(0, 1, (1,), dtype=np.uint8),
+            "is_last": gym.spaces.Box(0, 1, (1,), dtype=np.uint8),
+            "is_terminal": gym.spaces.Box(0, 1, (1,), dtype=np.uint8),
             "log_reward": gym.spaces.Box(-np.inf, np.inf, (1,), dtype=np.float32),
         }
         spaces.update(
@@ -69,3 +69,13 @@ class Crafter:
             "is_terminal": False,
         }
         return obs
+
+
+if __name__ == "__main__":
+    env = Crafter("reward")
+    obs = env.reset()
+    print(env.observation_space)
+    action = env.action_space.sample()
+    obs, reward, done, info = env.step(action)
+
+    env.render

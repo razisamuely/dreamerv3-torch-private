@@ -12,17 +12,12 @@ import os
 os.environ["MUJOCO_GL"] = "glfw"  # Change to "egl" or "osmesa" if needed
 
 # Import modules from the project
-import tools
-import dreamer
-import models
 import envs.dmc as dmc
 import envs.wrappers as wrappers
 
 # Create a simplified visualization script
-def main(config, logdir):
-    # Load configuration
-    logdir = pathlib.Path(logdir).expanduser()
-    print(f"Loading model from {logdir}")
+def main(config):
+
     
     # Create environment
     print(f"Creating environment: {config.task}")
@@ -47,7 +42,6 @@ def main(config, logdir):
     
     # Load the saved checkpoint (just to check it exists)
     print("Loading checkpoint...")
-    checkpoint = torch.load(logdir / "latest.pt", map_location="cpu")
     
     # Visualization loop
     print("\nStarting visualization with random policy...")
@@ -124,13 +118,13 @@ def main(config, logdir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--logdir', type=str, required=True, help='Path to the model directory')
     parser.add_argument('--configs', nargs="+", default=["dmc_vision"], help='Configuration name(s)')
+    task_prefix = "dmc_vision"
     parser.add_argument('--task', type=str, help='Override task name (optional)')
     args = parser.parse_args()
     
     # Load configuration from configs.yaml
-    configs = yaml.safe_load((pathlib.Path(sys.argv[0]).parent / "configs.yaml").read_text())
+    configs = yaml.safe_load((pathlib.Path(sys.argv[0]).parent.parent / "configs.yaml").read_text())
     
     def recursive_update(base, update):
         for key, value in update.items():
@@ -156,14 +150,8 @@ if __name__ == "__main__":
             except ValueError:
                 pass
         setattr(config, key, value)
-    
-    # Use task from arguments or from directory name
+
     if args.task:
         setattr(config, "task", args.task)
-    else:
-        # Extract task from the directory name
-        model_dir = pathlib.Path(args.logdir)
-        task_name = model_dir.name
-        setattr(config, "task", task_name)
-    
-    main(config, args.logdir)
+
+    main(config)

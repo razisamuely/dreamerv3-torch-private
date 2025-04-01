@@ -153,6 +153,27 @@ def make_env(config, mode, id):
             task, config.action_repeat, config.size, seed=config.seed + id
         )
         env = wrappers.NormalizeActions(env)
+
+    elif suite == "vmas":
+        if "spread" in task:
+            import envs.vmas_simple_spread as vmas
+            # Get number of agents from config if available
+            n_agents = getattr(config, 'n_agents', 2)
+            env = vmas.VmasSpread(
+                task, config.action_repeat, config.size, seed=config.seed + id, 
+                device=config.device, n_agents=n_agents
+            )
+            env = wrappers.NormalizeActions(env)
+        else:
+            import envs.vmas_simple as vmas
+            # Get number of agents from config if available
+            n_agents = getattr(config, 'n_agents', 1)
+            env = vmas.Vmas(
+                task, config.action_repeat, config.size, seed=config.seed + id, 
+                device=config.device, n_agents=n_agents
+            )
+            env = wrappers.NormalizeActions(env)
+            
     elif suite == "atari":
         import envs.atari as atari
 
@@ -346,9 +367,11 @@ def main(config):
                 action_dict = {"action": action}
             
             # Render the frame
-            frame = env.render(mode='rgb_array')
+            frame = env.render(mode='rgb_array',get_orignal_frame = True)  # Use the original frame
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             
+            # save frame as png 
+            cv2.imwrite(f"frame.png", frame)
             # Use fixed size for display
             display_frame = cv2.resize(frame, (display_width, display_height), interpolation=cv2.INTER_CUBIC)
             
@@ -397,7 +420,7 @@ if __name__ == "__main__":
     parser.add_argument("--configs", nargs="+")
     args, remaining = parser.parse_known_args()
     configs = yaml.safe_load(
-        (pathlib.Path(sys.argv[0]).parent / "configs.yaml").read_text()
+        (pathlib.Path(sys.argv[0]).parent.parent / "configs.yaml").read_text()
     )
 
     def recursive_update(base, update):
@@ -411,8 +434,21 @@ if __name__ == "__main__":
     defaults = {}
     for name in name_list:
         recursive_update(defaults, configs[name])
+
+    # defaults["configs"] = "dmc_vision"
+    # defaults["task"] = "dmc_walker_walk"
+    # defaults["logdir"] = "./logdir/dmc_walker_walk"
+    # defaults["device"] = "cuda"
+
+    # python debug/visualize_model_behaviour.py --configs dmc_vision --task dmc_cartpole_balance --logdir ./logdir/dmc_cartpole_balance
+    # python debug/visualize_model_behaviour.py --configs dmc_vision --task vmas_simple --logdir ./logdir/vmas_simple 
+    # python debug/visualize_model_behaviour.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread 
+    
+    # if no cmd variables input , use the above hard-coded values
+
     parser = argparse.ArgumentParser()
     for key, value in sorted(defaults.items(), key=lambda x: x[0]):
         arg_type = tools.args_type(value)
         parser.add_argument(f"--{key}", type=arg_type, default=arg_type(value))
     main(parser.parse_args(remaining))
+
