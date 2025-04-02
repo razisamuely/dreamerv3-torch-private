@@ -242,9 +242,15 @@ def make_env(config, mode, id):
     elif suite == "vmas":
         if "spread" in task:
             from envs.vmas_simple_spread import VmasSpread
-            # Use getattr instead of get for Namespace objects
-            n_agents = getattr(config, 'n_agents', 2)
+            n_agents = getattr(config, 'n_agents', 1)
             env = VmasSpread(
+                task, config.action_repeat, config.size, seed=config.seed + id, device=config.device,
+                n_agents=n_agents
+            )
+        elif "navigation" in task:
+            from envs.vmas_navigation import VmasNavigationEnv
+            n_agents = getattr(config, 'n_agents', 1)
+            env = VmasNavigationEnv(
                 task, config.action_repeat, config.size, seed=config.seed + id, device=config.device,
                 n_agents=n_agents
             )
@@ -437,3 +443,4 @@ if __name__ == "__main__":
 # python dreamer.py --configs vmas --task vmas_simple --logdir ./logdir/vmas_simple
 # python dreamer.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread
 # python dreamer.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread
+# python dreamer.py --configs vmas --task vmas_navigation --logdir ./logdir/vmas_navigation
