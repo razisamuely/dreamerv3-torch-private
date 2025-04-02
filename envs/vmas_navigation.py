@@ -7,7 +7,7 @@ from vmas.simulator.core import Agent
 # Add this at the beginning of your reset and step methods
 
 
-class VmasSpread:
+class VmasNavigationEnv:
     metadata = {}
 
     def __init__(self, name, action_repeat=1, size=(64, 64), camera=None, seed=0, device="cpu", **kwargs):
@@ -69,14 +69,16 @@ class VmasSpread:
             else:
                 # If it's a direct Box space
                 shape = agent_space.shape if agent_space.shape else (1,)
-                spaces[f"agent{agent_idx}_obs"] = agent_space
+                spaces[f"agent{agent_idx}_obs"] = gym.spaces.Box(
+                    -np.inf, np.inf, shape, dtype=np.float32
+                )
         
         # Add image observation
         spaces["image"] = gym.spaces.Box(0, 255, self._size + (3,), dtype=np.uint8)
         # Add required fields for DreamerV3
-        spaces["is_first"] = gym.spaces.Box(0, 1, (), dtype=np.bool_)
-        spaces["is_last"] = gym.spaces.Box(0, 1, (), dtype=np.bool_)
-        spaces["is_terminal"] = gym.spaces.Box(0, 1, (), dtype=np.bool_)
+        spaces["is_first"] = gym.spaces.Box(0, 1, (1,), dtype=np.bool_)
+        spaces["is_last"] = gym.spaces.Box(0, 1, (1,), dtype=np.bool_)
+        spaces["is_terminal"] = gym.spaces.Box(0, 1, (1,), dtype=np.bool_)
         
         return gym.spaces.Dict(spaces)
     @property

@@ -116,6 +116,7 @@ vmas:
   action_repeat: 2
   envs: 4
   train_ratio: 512
+  n_agents: 4
   video_pred_log: true
   encoder: {mlp_keys: '$^', cnn_keys: 'image'}
   decoder: {mlp_keys: '$^', cnn_keys: 'image'}

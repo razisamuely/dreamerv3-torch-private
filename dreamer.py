@@ -87,23 +87,40 @@ class Dreamer(nn.Module):
         self._step = logger.step // config.action_repeat
         self._update_count = 0
         self._dataset = dataset
+        
+        # Init the world model
         self._wm = models.WorldModel(obs_space, act_space, self._step, config)
-        self._task_behavior = models.ImagBehavior(config, self._wm)
-        if (
-            config.compile and os.name != "nt"
-        ):  # compilation is not supported on windows
+
+        # Init the task behavior
+        self._task_behaviors = [models.ImagBehavior(config, self._wm) for _ in range(config.n_agents)]
+
+        # Model compilation
+        if (config.compile and os.name != "nt"):
             self._wm = torch.compile(self._wm)
-            self._task_behavior = torch.compile(self._task_behavior)
+            for i in range(config.n_agents):
+                self._task_behaviors[i] = torch.compile(self._task_behaviors[i])
+
+        # Reward head
         reward = lambda f, s, a: self._wm.heads["reward"](f).mean()
-        self._expl_behavior = dict(
-            greedy=lambda: self._task_behavior,
-            random=lambda: expl.Random(config, act_space),
-            plan2explore=lambda: expl.Plan2Explore(config, self._wm, reward),
-        )[config.expl_behavior]().to(self._config.device)
+
+        # Task behavior, 1) greedy, 2) random, 3) plan2explore
+        self._expl_behaviors = []
+        for _ in range(config.n_agents):
+            if config.expl_behavior == "greedy":
+                expl_behavior = self._task_behaviors[_]
+            elif config.expl_behavior == "random":
+                expl_behavior = expl.Random(config, act_space)
+            elif config.expl_behavior == "plan2explore":
+                expl_behavior = expl.Plan2Explore(config, self._wm, reward)
+            else:
+                raise NotImplementedError(config.expl_behavior)
+            
+            self._expl_behaviors.append(expl_behavior.to(self._config.device))
 
     def __call__(self, obs, reset, state=None, training=True):
         step = self._step
         if training:
+            # Pretrain or normal training steps
             steps = (
                 self._config.pretrain
                 if self._should_pretrain()
@@ -113,6 +130,8 @@ class Dreamer(nn.Module):
                 self._train(next(self._dataset))
                 self._update_count += 1
                 self._metrics["update_count"] = self._update_count
+                
+            # Log metrics if it's time
             if self._should_log(step):
                 for name, values in self._metrics.items():
                     self._logger.scalar(name, float(np.mean(values)))
@@ -122,11 +141,13 @@ class Dreamer(nn.Module):
                     self._logger.video("train_openl", to_np(openl))
                 self._logger.write(fps=True)
 
+        # Get policy outputs for all agents
         policy_output, state = self._policy(obs, state, training)
 
         if training:
             self._step += len(reset)
             self._logger.step = self._config.action_repeat * self._step
+            
         return policy_output, state
 
     def _policy(self, obs, state, training):
@@ -134,49 +155,119 @@ class Dreamer(nn.Module):
             latent = action = None
         else:
             latent, action = state
+        
+        # Preprocess observations and encode them
         obs = self._wm.preprocess(obs)
         embed = self._wm.encoder(obs)
+        
+        # Update the latent state based on new observations
         latent, _ = self._wm.dynamics.obs_step(latent, action, embed, obs["is_first"])
         if self._config.eval_state_mean:
             latent["stoch"] = latent["mean"]
+        
+        # Get features from latent state
         feat = self._wm.dynamics.get_feat(latent)
-        if not training:
-            actor = self._task_behavior.actor(feat)
-            action = actor.mode()
-        elif self._should_expl(self._step):
-            actor = self._expl_behavior.actor(feat)
-            action = actor.sample()
+        
+        # Initialize container for all agents' actions and logprobs
+        actions = []
+        logprobs = []
+        
+        # Get actions for each agent
+        for agent_idx in range(self._config.n_agents):
+            if not training:
+                # Use task behavior (pure exploitation) during evaluation
+                actor = self._task_behaviors[agent_idx].actor(feat)
+                agent_action = actor.mode()
+            elif self._should_expl(self._step):
+                # Use exploration behavior during exploration phase
+                actor = self._expl_behaviors[agent_idx].actor(feat)
+                agent_action = actor.sample()
+            else:
+                # Use task behavior but with sampling during normal training
+                actor = self._task_behaviors[agent_idx].actor(feat)
+                agent_action = actor.sample()
+            
+            # Get log probability of the action
+            agent_logprob = actor.log_prob(agent_action)
+            
+            # Store agent's action and logprob
+            actions.append(agent_action.detach())
+            logprobs.append(agent_logprob)
+        
+        # Combine actions from all agents
+        if self._config.n_agents > 1:
+            # Combine actions based on your multi-agent environment's needs
+            # This could be concatenation, stacking, or a custom function
+            combined_action = torch.cat(actions, dim=-1)  # Assuming actions are concatenated in action space
+            combined_logprob = torch.stack(logprobs, dim=-1)
         else:
-            actor = self._task_behavior.actor(feat)
-            action = actor.sample()
-        logprob = actor.log_prob(action)
-        latent = {k: v.detach() for k, v in latent.items()}
-        action = action.detach()
+            combined_action = actions[0]
+            combined_logprob = logprobs[0]
+        
+        # Handle one-hot conversion if needed
         if self._config.actor["dist"] == "onehot_gumble":
-            action = torch.one_hot(
-                torch.argmax(action, dim=-1), self._config.num_actions
+            # You might need to adapt this for multi-agent case
+            combined_action = torch.one_hot(
+                torch.argmax(combined_action, dim=-1), self._config.num_actions
             )
-        policy_output = {"action": action, "logprob": logprob}
-        state = (latent, action)
+        
+        # Detach latent for next step
+        latent = {k: v.detach() for k, v in latent.items()}
+        
+        policy_output = {
+            "action": combined_action, 
+            "logprob": combined_logprob,
+            "agent_actions": actions  # Keep individual actions for debugging or custom environment needs
+        }
+        
+        state = (latent, combined_action)
         return policy_output, state
 
     def _train(self, data):
         metrics = {}
-        post, context, mets = self._wm._train(data)
-        metrics.update(mets)
+        
+        # Train world model (shared among all agents)
+        post, context, wm_metrics = self._wm._train(data)
+        metrics.update(wm_metrics)
+        
+        # Start state for imagination
         start = post
+        
+        # Reward function lambda used by all agents
         reward = lambda f, s, a: self._wm.heads["reward"](
             self._wm.dynamics.get_feat(s)
         ).mode()
-        metrics.update(self._task_behavior._train(start, reward)[-1])
+        
+        # Train each agent's actor-critic separately
+        for agent_idx, behavior in enumerate(self._task_behaviors):
+            # Train current agent's policy using the shared world model
+            _, _, _, _, agent_metrics = behavior._train(start, reward)
+            
+            # Add agent identifier to metrics
+            agent_prefixed_metrics = {f"agent{agent_idx}_{key}": value 
+                                    for key, value in agent_metrics.items()}
+            metrics.update(agent_prefixed_metrics)
+        
+        # Train exploration behavior if using non-greedy exploration
         if self._config.expl_behavior != "greedy":
-            mets = self._expl_behavior.train(start, context, data)[-1]
-            metrics.update({"expl_" + key: value for key, value in mets.items()})
+            for agent_idx, expl_behavior in enumerate(self._expl_behaviors):
+                # Skip if the exploration behavior is the same as task behavior (greedy case)
+                if expl_behavior is self._task_behaviors[agent_idx]:
+                    continue
+                    
+                # Train exploration behavior
+                mets = expl_behavior.train(start, context, data)[-1]
+                metrics.update({f"agent{agent_idx}_expl_{key}": value 
+                            for key, value in mets.items()})
+        
+        # Update metrics tracking
         for name, value in metrics.items():
-            if not name in self._metrics.keys():
+            if name not in self._metrics:
                 self._metrics[name] = [value]
             else:
                 self._metrics[name].append(value)
+                
+        return metrics
 
 
 def count_steps(folder):
@@ -242,9 +333,15 @@ def make_env(config, mode, id):
     elif suite == "vmas":
         if "spread" in task:
             from envs.vmas_simple_spread import VmasSpread
-            # Use getattr instead of get for Namespace objects
             n_agents = getattr(config, 'n_agents', 2)
             env = VmasSpread(
+                task, config.action_repeat, config.size, seed=config.seed + id, device=config.device,
+                n_agents=n_agents
+            )
+        elif "navigation" in task:
+            from envs.vmas_navigation import VmasNavigationEnv
+            n_agents = getattr(config, 'n_agents', 1)
+            env = VmasNavigationEnv(
                 task, config.action_repeat, config.size, seed=config.seed + id, device=config.device,
                 n_agents=n_agents
             )
@@ -437,3 +534,4 @@ if __name__ == "__main__":
 # python dreamer.py --configs vmas --task vmas_simple --logdir ./logdir/vmas_simple
 # python dreamer.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread
 # python dreamer.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread
+# python dreamer.py --configs vmas --task vmas_navigation --logdir ./logdir/vmas_navigation
