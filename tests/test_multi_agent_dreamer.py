@@ -10,8 +10,12 @@ import gym
 from tools import Logger, load_episodes, args_type
 sys.path.append(str(Path(__file__).parent.parent))
 from dreamer import Dreamer, count_steps, make_dataset,make_env
-import argparse
-
+import yaml
+import pathlib
+import types
+import sys
+import os
+from tests.utils import load_config
 
 # train_envs[0].action_space Box(-1.0, 1.0, (8,), float32)
 ACTION_SPACE = gym.spaces.Box(low = -1,high = 1, shape = (8,), dtype=np.float32)
@@ -27,48 +31,6 @@ OBSERVATION_SPACE = gym.spaces.Dict({
 })
 
 
-import yaml
-import pathlib
-import types
-import sys
-import os
-
-def load_config():
-    # Load YAML file
-    config_path = pathlib.Path(sys.argv[0]).parent.parent / "configs.yaml"
-    config_data = yaml.safe_load(config_path.read_text())
-    
-    # Get defaults section
-    defaults = config_data["defaults"]
-    
-    # Helper function to convert values and handle nested dictionaries
-    def process_value(value):
-        if isinstance(value, dict):
-            # Keep as dictionary for compatibility with ** unpacking
-            return {k: process_value(v) for k, v in value.items()}
-        elif isinstance(value, str):
-            # Try to convert scientific notation strings to float
-            if 'e' in value.lower() or 'e+' in value.lower() or 'e-' in value.lower():
-                try:
-                    return float(value)
-                except ValueError:
-                    pass
-        return value
-    
-    # Create config object with proper types
-    config = types.SimpleNamespace()
-    for key, value in defaults.items():
-        setattr(config, key, process_value(value))
-    
-    # Add additional settings
-    config.logdir = str(pathlib.Path(__file__).parent.parent / "logs")
-    config.traindir = config.traindir or pathlib.Path(config.logdir) / "train_eps"
-    
-    # Set multi-agent configuration
-    config.n_agents = 4  # Set number of agents for testing
-    
-    return config
-
 class TestMultiAgentDreamer(unittest.TestCase):
 
     def setUp(self):
@@ -76,10 +38,10 @@ class TestMultiAgentDreamer(unittest.TestCase):
         self.configs.logdir =  str(pathlib.Path(__file__).parent.parent / "logs")
 
         logdir = pathlib.Path(self.configs.logdir).expanduser()
+
         # Parse arguments (if any) and override defaults
         self.configs.traindir = self.configs.traindir or logdir / "train_eps"
-                
-
+                    
         # Set up Logger
         step = count_steps(self.configs.traindir)
         self.logger =  Logger(logdir, self.configs.action_repeat * step)
@@ -88,15 +50,17 @@ class TestMultiAgentDreamer(unittest.TestCase):
         directory = self.configs.traindir
         train_eps =  load_episodes(directory, limit=self.configs.dataset_size)
         self.train_dataset = make_dataset(train_eps, self.configs)
+        self.train_dataset = self._create_mock_dataset()
 
+        # Set up environments - make env is a function that creates the environment
         make = lambda mode, id: make_env(self.configs, mode, id)
         train_envs = [make("train", i) for i in range(self.configs.envs)]
+
+        # Set up action and observation spaces
         acts = train_envs[0].action_space
         self.configs.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
         
-        
-
-
+        # Set up observation shape
         self.agent = Dreamer(
             obs_space = OBSERVATION_SPACE, 
             act_space = ACTION_SPACE,
@@ -105,8 +69,100 @@ class TestMultiAgentDreamer(unittest.TestCase):
             dataset = self.train_dataset
         )
 
-    def test_first(self):
-        pass 
+    def _create_mock_dataset(self):
+        """Create a mock dataset that yields fake batches indefinitely."""
+        def generator():
+            while True:
+                # Create batch with proper dimensions
+                batch = {
+                    'agent0_obs': torch.zeros((self.configs.batch_size, self.configs.batch_length, 18)),
+                    'agent1_obs': torch.zeros((self.configs.batch_size, self.configs.batch_length, 18)),
+                    'agent2_obs': torch.zeros((self.configs.batch_size, self.configs.batch_length, 18)),
+                    'agent3_obs': torch.zeros((self.configs.batch_size, self.configs.batch_length, 18)),
+                    'image': torch.zeros((self.configs.batch_size, self.configs.batch_length, 64, 64, 3)),
+                    'action': torch.zeros((self.configs.batch_size, self.configs.batch_length, self.configs.num_actions * self.configs.n_agents)),
+                    'reward': torch.zeros((self.configs.batch_size, self.configs.batch_length)),
+                    'discount': torch.ones((self.configs.batch_size, self.configs.batch_length)),
+                    'is_first': torch.zeros((self.configs.batch_size, self.configs.batch_length), dtype=torch.bool),
+                    'is_terminal': torch.zeros((self.configs.batch_size, self.configs.batch_length), dtype=torch.bool)
+                }
+                yield batch
+        
+        return generator()
+    
+
+
+    # def test_call(self):
+    #     """Test if the __call__ method works correctly with multiple agents."""
+        
+    #     # Create a small batch of observations
+    #     batch_size = 2
+    #     obs = {
+    #         'image': torch.zeros((batch_size, 64, 64, 3), dtype=torch.float32),
+    #         'agent0_obs': torch.zeros((batch_size, 18), dtype=torch.float32),
+    #         'agent1_obs': torch.zeros((batch_size, 18), dtype=torch.float32),
+    #         'agent2_obs': torch.zeros((batch_size, 18), dtype=torch.float32),
+    #         'agent3_obs': torch.zeros((batch_size, 18), dtype=torch.float32),
+    #         'is_first': torch.ones((batch_size,), dtype=torch.bool),
+    #         'is_last': torch.zeros((batch_size,), dtype=torch.bool),
+    #         'is_terminal': torch.zeros((batch_size,), dtype=torch.bool)
+    #     }
+        
+    #     # Create reset tensor
+    #     reset = torch.zeros(batch_size, dtype=torch.bool)
+        
+    #     # Call the agent
+    #     policy_output, state = self.agent(obs, reset, None, training=False)
+        
+    #     # Check that policy output contains the expected keys
+    #     self.assertIn('action', policy_output, "Policy output should contain 'action'")
+    #     self.assertIn('logprob', policy_output, "Policy output should contain 'logprob'")
+    #     self.assertIn('agent_actions', policy_output, "Policy output should contain 'agent_actions'")
+        
+    #     # Check if agent_actions contains the right number of elements (one per agent)
+    #     self.assertEqual(len(policy_output['agent_actions']), self.configs.n_agents,
+    #                     f"agent_actions should contain {self.configs.n_agents} elements")
+        
+    #     # Check if combined action has the right shape
+    #     expected_action_shape = (batch_size, self.configs.num_actions * self.configs.n_agents)
+    #     self.assertEqual(policy_output['action'].shape, expected_action_shape,
+    #                     f"Combined action shape should be {expected_action_shape}")
+        
+    #     # Make a second call with the state from the first call to check state handling
+    #     policy_output2, state2 = self.agent(obs, reset, state, training=False)
+        
+    #     # State should not be None
+    #     self.assertIsNotNone(state2, "State should not be None after second call")
+        
+    #     # Make sure the policy output from the second call has the same structure
+    #     self.assertEqual(len(policy_output2['agent_actions']), self.configs.n_agents,
+    #                     "Second call should return the same number of agent actions")
+
+    def test_call_train_true(self):
+        batch_size = 2
+        obs = {
+            'image': torch.zeros((batch_size, 64, 64, 3), dtype=torch.float32),
+            'agent0_obs': torch.zeros((batch_size, 18), dtype=torch.float32),
+            'agent1_obs': torch.zeros((batch_size, 18), dtype=torch.float32),
+            'agent2_obs': torch.zeros((batch_size, 18), dtype=torch.float32),
+            'agent3_obs': torch.zeros((batch_size, 18), dtype=torch.float32),
+            'is_first': torch.ones((batch_size,), dtype=torch.bool),
+            'is_last': torch.zeros((batch_size,), dtype=torch.bool),
+            'is_terminal': torch.zeros((batch_size,), dtype=torch.bool)
+        }
+        
+        # Create reset tensor
+        reset = torch.zeros(batch_size, dtype=torch.bool)
+        
+        self.agent._should_train = lambda x: 1 
+        
+        # Call the agent
+        policy_output, state = self.agent(obs, reset, None, training=True)
+
+        # TODO : Fix training with multiple agents, looks like mismatch in dimension of world model 
+
+
+
     # def test_init(self):
     #     """Test if initialization creates the correct number of actors"""
     #     self.assertEqual(len(self.agent._task_behaviors), self.config.n_agents, 

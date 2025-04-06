@@ -48,7 +48,7 @@ class WorldModel(nn.Module):
             config.dyn_min_std,
             config.unimix_ratio,
             config.initial,
-            config.num_actions,
+            config.num_actions * config.n_agents,
             self.embed_size,
             config.device,
         )
@@ -288,6 +288,7 @@ class ImagBehavior(nn.Module):
         self,
         start,
         objective,
+        all_policies=None
     ):
         self._update_slow_target()
         metrics = {}
@@ -295,7 +296,7 @@ class ImagBehavior(nn.Module):
         with tools.RequiresGrad(self.actor):
             with torch.cuda.amp.autocast(self._use_amp):
                 imag_feat, imag_state, imag_action = self._imagine(
-                    start, self.actor, self._config.imag_horizon
+                    start, self.actor, self._config.imag_horizon, all_policies
                 )
                 reward = objective(imag_feat, imag_state, imag_action)
                 actor_ent = self.actor(imag_feat).entropy()
@@ -345,24 +346,57 @@ class ImagBehavior(nn.Module):
             metrics.update(self._value_opt(value_loss, self.value.parameters()))
         return imag_feat, imag_state, imag_action, weights, metrics
 
-    def _imagine(self, start, policy, horizon):
+    def _imagine(self, start, policy, horizon, all_policies=None):
+        """
+        Rollout imaginary trajectories using the world model and agent policies.
+        
+        Args:
+            start: Initial latent state dictionary from which to start rollouts
+            policy: Either a single policy or a list of policies (one per agent)
+            horizon: Number of steps to rollout
+        
+        Returns:
+            tuple of (features, states, actions) containing the imagined trajectories
+        """
         dynamics = self._world_model.dynamics
         flatten = lambda x: x.reshape([-1] + list(x.shape[2:]))
         start = {k: flatten(v) for k, v in start.items()}
-
+        
+        # Check if we're dealing with multiple agents
+        multi_agent = isinstance(policy, list)
+        n_agents = len(policy) if multi_agent else 1
+        
         def step(prev, _):
             state, _, _ = prev
             feat = dynamics.get_feat(state)
             inp = feat.detach()
-            action = policy(inp).sample()
-            succ = dynamics.img_step(state, action)
-            return succ, feat, action
+            
+            # Get actions from all agents (from their individual policies)
+            all_actions = []
+            for agent_idx in range(self._config.n_agents):
+                # Get the appropriate policy for this agent
+                agent_policy = all_policies[agent_idx]
+                agent_action = agent_policy(inp).sample()
+                all_actions.append(agent_action)
+            
+            # Combine actions (same way as in _policy)
+            if self._config.n_agents > 1:
+                combined_action = torch.cat(all_actions, dim=-1)
+            else:
+                combined_action = all_actions[0]
+            
+            # Step the world model with combined action
+            succ = dynamics.img_step(state, combined_action)
+            return succ, feat, combined_action
 
+        # Use static_scan to rollout the trajectories
         succ, feats, actions = tools.static_scan(
             step, [torch.arange(horizon)], (start, None, None)
         )
+        
+        # Combine the initial state with the successor states
         states = {k: torch.cat([start[k][None], v[:-1]], 0) for k, v in succ.items()}
-
+        
         return feats, states, actions
 
     def _compute_target(self, imag_feat, imag_state, reward):

@@ -239,9 +239,11 @@ class Dreamer(nn.Module):
         ).mode()
         
         # Train each agent's actor-critic separately
+        all_policy_actors = [behavior.actor for behavior in self._task_behaviors]
+ 
         for agent_idx, behavior in enumerate(self._task_behaviors):
             # Train current agent's policy using the shared world model
-            _, _, _, _, agent_metrics = behavior._train(start, reward)
+            _, _, _, _, agent_metrics = behavior._train(start, reward, all_policy_actors)
             
             # Add agent identifier to metrics
             agent_prefixed_metrics = {f"agent{agent_idx}_{key}": value 
