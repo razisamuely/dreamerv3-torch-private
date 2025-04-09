@@ -136,10 +136,10 @@ def test_no_random_action_is_taking_each_step():
 
 
 if __name__ == '__main__':
-    # test_observation_space_object_type()
+    test_observation_space_object_type()
     # test_action_space_object_type()
     # test_reset()
-    test_step()
+    # test_step()
     
     unittest.main()
     

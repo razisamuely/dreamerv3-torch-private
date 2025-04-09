@@ -79,16 +79,10 @@ class VmasSpread:
         spaces["is_terminal"] = gym.spaces.Box(0, 1, (), dtype=np.bool_)
         
         return gym.spaces.Dict(spaces)
+    
     @property
     def action_space(self):
-        # For continuous actions
-        if hasattr(self._env.action_space[0], "shape"):
-            low = np.concatenate([space.low for space in self._env.action_space])
-            high = np.concatenate([space.high for space in self._env.action_space])
-            return gym.spaces.Box(low, high, dtype=np.float32)
-        else:
-            raise ValueError("Action space is not continuous. Please check the environment. or fix this function to support discrete actions")
-
+        return self._env.action_space
     def step(self, action):
         
         # if action is a numpy array, convert it to a list of tensors

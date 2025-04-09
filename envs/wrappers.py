@@ -29,14 +29,33 @@ class TimeLimit(gym.Wrapper):
 class NormalizeActions(gym.Wrapper):
     def __init__(self, env):
         super().__init__(env)
+        length_action_space = len(env.action_space)
+        if (length_action_space != 1) and isinstance(env.action_space, gym.spaces.Tuple):
+            action_space = env.action_space[0]
+
         self._mask = np.logical_and(
-            np.isfinite(env.action_space.low), np.isfinite(env.action_space.high)
+            np.isfinite(action_space.low), np.isfinite(action_space.high)
         )
-        self._low = np.where(self._mask, env.action_space.low, -1)
-        self._high = np.where(self._mask, env.action_space.high, 1)
+        
+        self._low = np.where(self._mask, action_space.low, -1)
+        self._high = np.where(self._mask, action_space.high, 1)
+
         low = np.where(self._mask, -np.ones_like(self._low), self._low)
         high = np.where(self._mask, np.ones_like(self._low), self._high)
-        self.action_space = gym.spaces.Box(low, high, dtype=np.float32)
+
+        self._low = np.repeat(np.where(self._mask, action_space.low, -1), length_action_space, axis=0)
+        self._high = np.repeat(np.where(self._mask, action_space.high, 1), length_action_space, axis=0)
+        self._mask = np.repeat(self._mask, length_action_space, axis=0)
+
+        if length_action_space == 1:
+            self.action_space = gym.spaces.Box(low, high, dtype=np.float32)
+        else:
+            self.action_space = gym.spaces.Tuple(
+                [
+                    gym.spaces.Box(low, high, dtype=np.float32)
+                    for i in range(length_action_space)
+                ]
+            )
 
     def step(self, action):
         original = (action + 1) / 2 * (self._high - self._low) + self._low

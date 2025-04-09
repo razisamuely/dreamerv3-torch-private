@@ -98,6 +98,7 @@ class Dreamer(nn.Module):
         if (config.compile and os.name != "nt"):
             self._wm = torch.compile(self._wm)
             for i in range(config.n_agents):
+                self._task_behaviors[i]._world_model = self._wm
                 self._task_behaviors[i] = torch.compile(self._task_behaviors[i])
 
         # Reward head
@@ -340,6 +341,7 @@ def make_env(config, mode, id):
                 task, config.action_repeat, config.size, seed=config.seed + id, device=config.device,
                 n_agents=n_agents
             )
+            print(env.action_space)
         elif "navigation" in task:
             from envs.vmas_navigation import VmasNavigationEnv
             n_agents = getattr(config, 'n_agents', 1)
