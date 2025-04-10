@@ -116,7 +116,7 @@ class VmasSpread:
             obs, rewards, terminated, truncated, infos = self._env.step(action)
 
             total_reward += sum([r.item() for r in rewards])
-            done = all(terminated) or all(truncated)
+            done = any(terminated) or any(truncated)
             if done:
                 break
 

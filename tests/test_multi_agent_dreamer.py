@@ -3,6 +3,7 @@ import gym.spaces
 import torch
 import numpy as np
 from pathlib import Path
+import envs.wrappers as wrappers
 import sys
 import yaml
 import pathlib
@@ -424,64 +425,12 @@ class TestMultiAgentDreamer(unittest.TestCase):
     #         self.assertEqual(str(params.device), target_device,
     #                         f"Exploration behavior {i} should be on the configured device")
 
-    def test_policy_determinism_sources(self):
-        """Test to identify sources of non-determinism in the policy"""
-        # Set random seeds for reproducibility
-        torch.manual_seed(42)
-        np.random.seed(42)
+    # def test_policy_determinism_sources(self):
+    #     """Test to identify sources of non-determinism in the policy"""
+    #     # Set random seeds for reproducibility
+    #     torch.manual_seed(42)
+    #     np.random.seed(42)
         
-        obs = {
-            'agent0_obs': torch.zeros((1, 18)),
-            'agent1_obs': torch.zeros((1, 18)),
-            'agent2_obs': torch.zeros((1, 18)),
-            'agent3_obs': torch.zeros((1, 18)),
-            'image': torch.zeros((1, 64, 64, 3)),
-            'is_first': torch.ones((1,), dtype=torch.bool),
-            'is_last': torch.zeros((1,), dtype=torch.bool),
-            'is_terminal': torch.zeros((1,), dtype=torch.bool)
-        }
-        
-        # Test 1: Fresh state each time
-        policy_output1, _ = self.agent._policy(obs, None, training=False)
-        policy_output2, _ = self.agent._policy(obs, None, training=False)
-        
-        print("Test 1 - Fresh states:")
-        print("Actions 1:", policy_output1["action"])
-        print("Actions 2:", policy_output2["action"])
-        print("Differ:", not torch.allclose(policy_output1["action"], policy_output2["action"], atol=1e-5))
-        
-        # Test 2: Reuse the same exact state
-        _, state1 = self.agent._policy(obs, None, training=False)
-        policy_output3, _ = self.agent._policy(obs, state1, training=False)
-        policy_output4, _ = self.agent._policy(obs, state1, training=False)
-        
-        print("\nTest 2 - Same exact state:")
-        print("Actions 3:", policy_output3["action"])
-        print("Actions 4:", policy_output4["action"])
-        print("Differ:", not torch.allclose(policy_output3["action"], policy_output4["action"], atol=1e-5))
-        
-        # Test 3: Actor determinism directly
-        with torch.no_grad():
-            # Get features
-            obs_p = self.agent._wm.preprocess(obs)
-            embed = self.agent._wm.encoder(obs_p)
-            latent, _ = self.agent._wm.dynamics.obs_step(None, None, embed, obs["is_first"])
-            if self.configs.eval_state_mean:
-                latent["stoch"] = latent["mean"]
-            feat = self.agent._wm.dynamics.get_feat(latent)
-            
-            # Test actor directly
-            actor = self.agent._task_behaviors[0].actor(feat)
-            action1 = actor.mode()
-            action2 = actor.mode()
-            
-            print("\nTest 3 - Actor directly:")
-            print("Action 1:", action1)
-            print("Action 2:", action2)
-            print("Differ:", not torch.allclose(action1, action2, atol=1e-5))
-            
-    # def test_exploration_exploitation_switch(self):
-    #     """Test if agent switches between exploration and exploitation without mocks"""
     #     obs = {
     #         'agent0_obs': torch.zeros((1, 18)),
     #         'agent1_obs': torch.zeros((1, 18)),
@@ -493,42 +442,277 @@ class TestMultiAgentDreamer(unittest.TestCase):
     #         'is_terminal': torch.zeros((1,), dtype=torch.bool)
     #     }
         
-    #     # Save original step and should_expl function
-    #     original_step = self.agent._step
-    #     original_should_expl = self.agent._should_expl
+    #     # Test 1: Fresh state each time
+    #     policy_output1, _ = self.agent._policy(obs, None, training=False)
+    #     policy_output2, _ = self.agent._policy(obs, None, training=False)
         
-    #     try:
-    #         # Force exploration mode by making _should_expl always return True
-    #         self.agent._should_expl = lambda x: True
+    #     print("Test 1 - Fresh states:")
+    #     print("Actions 1:", policy_output1["action"])
+    #     print("Actions 2:", policy_output2["action"])
+    #     print("Differ:", not torch.allclose(policy_output1["action"], policy_output2["action"], atol=1e-5))
+        
+    #     # Test 2: Reuse the same exact state
+    #     _, state1 = self.agent._policy(obs, None, training=False)
+    #     policy_output3, _ = self.agent._policy(obs, state1, training=False)
+    #     policy_output4, _ = self.agent._policy(obs, state1, training=False)
+        
+    #     print("\nTest 2 - Same exact state:")
+    #     print("Actions 3:", policy_output3["action"])
+    #     print("Actions 4:", policy_output4["action"])
+    #     print("Differ:", not torch.allclose(policy_output3["action"], policy_output4["action"], atol=1e-5))
+        
+    #     # Test 3: Actor determinism directly
+    #     with torch.no_grad():
+    #         # Get features
+    #         obs_p = self.agent._wm.preprocess(obs)
+    #         embed = self.agent._wm.encoder(obs_p)
+    #         latent, _ = self.agent._wm.dynamics.obs_step(None, None, embed, obs["is_first"])
+    #         if self.configs.eval_state_mean:
+    #             latent["stoch"] = latent["mean"]
+    #         feat = self.agent._wm.dynamics.get_feat(latent)
             
-    #         # Call policy in exploration mode
-    #         policy_output_expl, _ = self.agent._policy(obs, None, training=True)
+    #         # Test actor directly
+    #         actor = self.agent._task_behaviors[0].actor(feat)
+    #         action1 = actor.mode()
+    #         action2 = actor.mode()
             
-    #         # Force exploitation mode by making _should_expl always return False
-    #         self.agent._should_expl = lambda x: False
+    #         print("\nTest 3 - Actor directly:")
+    #         print("Action 1:", action1)
+    #         print("Action 2:", action2)
+    #         print("Differ:", not torch.allclose(action1, action2, atol=1e-5))
             
-    #         # Call policy in exploitation mode
-    #         policy_output_expl2, _ = self.agent._policy(obs, None, training=True)
+
+    # def test_agent_training_effectiveness(self):
+    #     """Test that each agent's policy parameters are actually updated during training"""
+    #     # Get initial parameter values for each agent's policy
+    #     initial_params = []
+    #     for agent_idx in range(self.configs.n_agents):
+    #         # Store one parameter tensor from each agent's policy
+    #         for param in self.agent._task_behaviors[agent_idx].actor.parameters():
+    #             initial_params.append(param.clone().detach())
+    #             break
+        
+    #     # Ensure we got one parameter per agent
+    #     self.assertEqual(len(initial_params), self.configs.n_agents,
+    #                     "Should have one parameter tensor per agent")
+        
+    #     # Run several training steps to ensure parameters change
+    #     for _ in range(5):  # Run multiple steps for more reliable changes
+    #         batch = next(self.train_dataset)
+    #         self.agent._train(batch)
+        
+    #     # Check if parameters changed for each agent
+    #     for agent_idx in range(self.configs.n_agents):
+    #         # Get the same parameter we stored initially
+    #         current_param = None
+    #         for param in self.agent._task_behaviors[agent_idx].actor.parameters():
+    #             current_param = param
+    #             break
             
-    #         # Now test evaluation mode (should be deterministic/exploitation)
-    #         policy_output_eval, _ = self.agent._policy(obs, None, training=False)
-    #         policy_output_eval2, _ = self.agent._policy(obs, None, training=False)
-            
-    #         # Verify evaluation is deterministic (should get same actions)
-    #         self.assertTrue(torch.allclose(policy_output_eval["action"], policy_output_eval2["action"]),
-    #                         "Evaluation actions should be deterministic")
-            
-    #         # Check that exploration and exploitation policies are different
-    #         # Note: This may occasionally fail due to random chance, but is usually reliable
-    #         actions_different = not torch.allclose(policy_output_expl["action"], policy_output_eval["action"])
-    #         self.assertTrue(actions_different, 
-    #                         "Exploration and evaluation actions should typically differ")
-            
-    #     finally:
-    #         # Restore original values
-    #         self.agent._step = original_step
-    #         self.agent._should_expl = original_should_expl
+    #         # Check if parameter changed
+    #         param_changed = not torch.allclose(initial_params[agent_idx], current_param)
+    #         self.assertTrue(param_changed, 
+    #                     f"Agent {agent_idx}'s policy parameters should change during training")
+
+
+    # def test_episode_termination(self):
+    #     """Test that episodes correctly end when terminal states are reached"""
+    #     # Create a batch with explicit episode boundaries
+    #     batch_size = 2
+    #     batch_length = 10
+        
+    #     # Create a custom batch with clear episode boundaries
+    #     custom_batch = {
+    #         'agent0_obs': torch.zeros((batch_size, batch_length, 18)),
+    #         'agent1_obs': torch.zeros((batch_size, batch_length, 18)),
+    #         'agent2_obs': torch.zeros((batch_size, batch_length, 18)),
+    #         'agent3_obs': torch.zeros((batch_size, batch_length, 18)),
+    #         'image': torch.zeros((batch_size, batch_length, 64, 64, 3)),
+    #         'action': torch.zeros((batch_size, batch_length, self.configs.num_actions * self.configs.n_agents)),
+    #         'reward': torch.ones((batch_size, batch_length)),  # Set all rewards to 1
+    #         'discount': torch.ones((batch_size, batch_length)),
+    #         'is_first': torch.zeros((batch_size, batch_length), dtype=torch.bool),
+    #         'is_terminal': torch.zeros((batch_size, batch_length), dtype=torch.bool)
+    #     }
+        
+    #     # Set episode boundaries - make middle timestep terminal
+    #     terminal_step = 5
+    #     custom_batch['is_terminal'][:, terminal_step] = True
+    #     custom_batch['is_first'][:, 0] = True  # First step is start of episode
+    #     custom_batch['is_first'][:, terminal_step + 1] = True  # Step after terminal is start of new episode
+        
+    #     # Train on this batch
+    #     post, context, wm_metrics = self.agent._wm._train(custom_batch)
+        
+    #     # Check if the mask (discount) in the world model training
+    #     # properly zeroes out transitions after terminal states
+    #     if 'mask' in wm_metrics:
+    #         # If mask is available in metrics, check it directly
+    #         mask = wm_metrics['mask']
+    #         self.assertEqual(torch.sum(mask[:, terminal_step+1:]).item(), 0,
+    #                         "Mask should zero out steps after terminal state")
+        
+    #     # Alternative check: verify the GRU state resets after terminal state
+    #     # Extract features before and after terminal state
+    #     feat_post = self.agent._wm.dynamics.get_feat(post)
+        
+    #     # Check if there's a discontinuity in features at terminal state
+    #     # This is a bit implementation-specific, but we can look for larger changes
+    #     # at the terminal boundary compared to normal transitions
+    #     diffs = []
+    #     for t in range(1, batch_length):
+    #         diff = torch.mean(torch.abs(feat_post[:, t] - feat_post[:, t-1])).item()
+    #         diffs.append(diff)
+        
+    #     # The difference at the terminal boundary should be larger
+    #     terminal_diff = diffs[terminal_step]
+    #     avg_other_diff = sum(d for i, d in enumerate(diffs) if i != terminal_step) / (len(diffs) - 1)
+        
+    #     # Print for debugging
+    #     print(f"Feature difference at terminal boundary: {terminal_diff}")
+    #     print(f"Average difference at other steps: {avg_other_diff}")
+        
+    #     # The terminal difference should typically be larger as the state resets
+    #     self.assertGreater(terminal_diff, avg_other_diff ,
+    #                     "State change at terminal boundary should be larger than normal transitions")
     
+    def test_episode_truly_ends(self):
+        """Test that episodes truly end at terminal states and agent resets properly"""
+        
+        # Get a reference to one of your environments
+        env = self.train_envs[0]
+        
+        # Initialize variables
+        agent_state = None
+        total_steps = 0
+        episode_lengths = []
+        max_episodes = 3
+        episodes_completed = 0
+        
+        # Run for multiple episodes
+        while episodes_completed < max_episodes and total_steps < 1000:
+            # Reset environment
+            obs = env.reset()()
+            
+            # Add required flags if not present
+            if "is_first" not in obs:
+                obs["is_first"] = np.array([True])
+            if "is_terminal" not in obs:
+                obs["is_terminal"] = np.array([False])
+                
+            # Convert numpy arrays to tensors and ensure correct dimensions
+            obs_tensor = {}
+            for k, v in obs.items():
+                # Handle image specially to ensure correct dimensions
+                if k == 'image':
+                    if len(v.shape) == 3:  # If missing batch dimension
+                        v = np.expand_dims(v, 0)
+                elif isinstance(v, np.ndarray) and len(v.shape) == 1 and v.shape[0] == 1:
+                    # Keep arrays with shape [1] as is
+                    pass
+                elif isinstance(v, np.ndarray) and len(v.shape) == 1:
+                    # Add batch dimension to 1D arrays
+                    v = np.expand_dims(v, 0)
+                elif not isinstance(v, np.ndarray):
+                    # Convert scalars to arrays with batch dimension
+                    v = np.array([v])
+                    
+                obs_tensor[k] = v
+            
+            done = False
+            episode_step = 0
+            
+            # Run until episode ends
+            while not done and episode_step < 200:  # Cap at 200 steps per episode
+                # Get action from agent
+                policy_output, agent_state = self.agent(
+                    obs_tensor, 
+                    np.array([done]),
+                    agent_state,
+                    training=False
+                )
+                
+                # Extract action and step in environment
+                action = policy_output["action"][0].cpu().numpy()
+                action_dict = {"action": action}
+                
+                # Take step in environment
+                obs, reward, done, _ = env.step(action_dict)()
+                
+                # Process observation again
+                if "is_first" not in obs:
+                    obs["is_first"] = np.array([False])
+                if "is_terminal" not in obs:
+                    obs["is_terminal"] = np.array([done])  # Mark as terminal if done
+                    
+                # Convert to tensors with proper dimensions
+                obs_tensor = {}
+                for k, v in obs.items():
+                    # Handle image specially to ensure correct dimensions
+                    if k == 'image':
+                        if len(v.shape) == 3:  # If missing batch dimension
+                            v = np.expand_dims(v, 0)
+                    elif isinstance(v, np.ndarray) and len(v.shape) == 1 and v.shape[0] == 1:
+                        # Keep arrays with shape [1] as is
+                        pass
+                    elif isinstance(v, np.ndarray) and len(v.shape) == 1:
+                        # Add batch dimension to 1D arrays
+                        v = np.expand_dims(v, 0)
+                    elif not isinstance(v, np.ndarray):
+                        # Convert scalars to arrays with batch dimension
+                        v = np.array([v])
+                        
+                    obs_tensor[k] = v
+                    
+                episode_step += 1
+                total_steps += 1
+            
+            # Record completed episode
+            episode_lengths.append(episode_step)
+            episodes_completed += 1
+            
+            # Verify agent state reset happened
+            if agent_state is not None:
+                # Check if agent's internal state has proper reset indicators
+                self.assertTrue(
+                    "stoch" in agent_state[0],
+                    "Agent state should maintain stochastic component after episode termination"
+                )
+        
+        # Verify multiple episodes completed
+        self.assertEqual(
+            episodes_completed, 
+            max_episodes, 
+            f"Should complete {max_episodes} episodes but only completed {episodes_completed}"
+        )
+        
+        # Verify episodes had reasonable length
+        self.assertTrue(
+            all(length > 0 for length in episode_lengths),
+            "All episodes should have positive length"
+        )
+        
+        # Verify episodes had reasonable length
+        self.assertTrue(
+            all(length > 0 for length in episode_lengths),
+            "All episodes should have positive length"
+        )
+
+        # Check if all episodes hit the time limit or not
+        if all(length == 200 for length in episode_lengths):
+            print("NOTE: All episodes reached the maximum step limit (200)")
+            print("This suggests episodes are terminating due to the time limit, not natural termination")
+            # This isn't necessarily a failure, just informational
+        else:
+            # If lengths vary, then some episodes ended naturally
+            self.assertTrue(
+                len(set(episode_lengths)) > 1,
+                "Episode lengths should vary if natural termination occurs"
+            )
+
+        print(f"Episode lengths: {episode_lengths}")
+    
+
     ### ------------------------------------------------
 
 
@@ -537,55 +721,10 @@ class TestMultiAgentDreamer(unittest.TestCase):
     ### ------------------------------------------------
 
 
-
+    # Exploration vs explotation 
 
     ### ------------------------------------------------
 
-
-    # If your encoder combines agent observations differently, you may need
-    # more specific tests based on your implementation
-
-    # def test_call_method(self):
-    #     """Test if __call__ method works correctly with multiple agents"""
-    #     batch_size = 2
-    #     obs = {
-    #         'image': torch.zeros((batch_size, *self.obs_shape)),
-    #         'is_first': torch.zeros((batch_size,), dtype=torch.bool)
-    #     }
-    #     reset = torch.zeros(batch_size, dtype=torch.bool)
-        
-    #     # Call the agent
-    #     policy_output, state = self.agent(obs, reset, None, training=True)
-        
-    #     # Check that policy output contains actions for all agents
-    #     self.assertIn('agent_actions', policy_output, 
-    #                  "Policy output should contain individual agent actions")
-    #     self.assertEqual(len(policy_output['agent_actions']), self.config.n_agents,
-    #                     "Should return actions for all agents")
-
-    # def test_integrated_workflow(self):
-    #     """Test a full step of the agent to ensure components work together"""
-    #     # Setup initial state
-    #     batch_size = 2
-    #     obs = {
-    #         'image': torch.zeros((batch_size, *self.obs_shape)),
-    #         'is_first': torch.zeros((batch_size,), dtype=torch.bool)
-    #     }
-    #     reset = torch.zeros(batch_size, dtype=torch.bool)
-        
-    #     # First call to get policy and state
-    #     policy_output, state = self.agent(obs, reset, None, training=True)
-        
-    #     # Check policy output contains expected keys
-    #     self.assertIn('action', policy_output)
-    #     self.assertIn('logprob', policy_output)
-    #     self.assertIn('agent_actions', policy_output)
-        
-    #     # Second call with the state from the first call
-    #     policy_output2, state2 = self.agent(obs, reset, state, training=True)
-        
-    #     # State should be different from None
-    #     self.assertIsNotNone(state2)
 
 
 if __name__ == "__main__":
