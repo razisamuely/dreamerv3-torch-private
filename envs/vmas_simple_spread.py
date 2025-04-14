@@ -83,6 +83,7 @@ class VmasSpread:
     @property
     def action_space(self):
         return self._env.action_space
+    
     def step(self, action):
         
         # if action is a numpy array, convert it to a list of tensors

@@ -1,2 +1,4 @@
 sudo apt-get install unrar
 bash envs/setup_scripts/atari.sh
+
+

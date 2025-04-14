@@ -218,7 +218,7 @@ class Dreamer(nn.Module):
         policy_output = {
             "action": combined_action, 
             "logprob": combined_logprob,
-            "agent_actions": actions  # Keep individual actions for debugging or custom environment needs
+    #        "agent_actions": actions  # Keep individual actions for debugging or custom environment needs
         }
         
         state = (latent, combined_action)
@@ -336,10 +336,9 @@ def make_env(config, mode, id):
     elif suite == "vmas":
         if "spread" in task:
             from envs.vmas_simple_spread import VmasSpread
-            n_agents = getattr(config, 'n_agents', 2)
             env = VmasSpread(
                 task, config.action_repeat, config.size, seed=config.seed + id, device=config.device,
-                n_agents=n_agents
+                n_agents=config.n_agents
             )
             print(env.action_space)
         elif "navigation" in task:
@@ -358,6 +357,7 @@ def make_env(config, mode, id):
                 n_agents=n_agents
             )
         env = wrappers.NormalizeActions(env)
+        pass
 
     else:
         raise NotImplementedError(suite)
@@ -410,32 +410,66 @@ def main(config):
     else:
         train_envs = [Damy(env) for env in train_envs]
         eval_envs = [Damy(env) for env in eval_envs]
-    acts = train_envs[0].action_space
+    # acts = train_envs[0].action_space # before 
+    acts = train_envs[0].action_space[0] # after 
     print("Action Space", acts)
-    config.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
+    action_dim = acts.n if hasattr(acts, "n") else acts.shape[0]
+    config.num_actions = action_dim
+    num_agents = config.n_agents
+    batch_size = config.batch_size
 
     state = None
     if not config.offline_traindir:
         prefill = max(0, config.prefill - count_steps(config.traindir))
         print(f"Prefill dataset ({prefill} steps).")
+        
+        
         if hasattr(acts, "discrete"):
-            random_actor = tools.OneHotDist(
-                torch.zeros(config.num_actions).repeat(config.envs, 1)
-            )
+            random_distributions = []
+            for _ in range(num_agents):
+                random_distributions.append(
+                    tools.OneHotDist(
+                        torch.zeros(batch_size, action_dim)
+                    )
+                )
         else:
-            random_actor = torchd.independent.Independent(
-                torchd.uniform.Uniform(
-                    torch.tensor(acts.low).repeat(config.envs, 1),
-                    torch.tensor(acts.high).repeat(config.envs, 1),
-                ),
-                1,
-            )
+            # For continuous actions, create a proper random distribution
+            # that matches the shape of the agent's output
+            combined_low = torch.tensor(acts.low).repeat(num_agents)
+            combined_high = torch.tensor(acts.high).repeat(num_agents)
+            
+            # Create random distributions for each agent in the batch
+            random_distributions = []
+            for _ in range(num_agents):
+                random_distributions.append(
+                    torchd.independent.Independent(
+                        torchd.uniform.Uniform(
+                            torch.tensor(acts.low).repeat(batch_size, 1),
+                            torch.tensor(acts.high).repeat(batch_size, 1),
+                        ),
+                        1,
+                    )
+                )
 
         def random_agent(o, d, s):
-            action = random_actor.sample()
-            logprob = random_actor.log_prob(action)
-            return {"action": action, "logprob": logprob}, None
-
+            # Sample actions for each agent
+            actions = []
+            logprobs = []
+            
+            for dist in random_distributions:
+                action = dist.sample()
+                logprob = dist.log_prob(action)
+                actions.append(action)
+                logprobs.append(logprob)
+            
+            # Stack actions and logprobs to match agent output format
+            combined_action = torch.cat(actions, dim=1) if not hasattr(acts, "discrete") else torch.stack(actions, dim=1)
+            combined_logprob = torch.stack(logprobs, dim=1)
+            
+            return {"action": combined_action, "logprob": combined_logprob}, None
+        
+        
+        # TODO : The issue is missmatch between the real agent log prob and the random agent logprob
         state = tools.simulate(
             random_agent,
             train_envs,

@@ -30,7 +30,7 @@ class NormalizeActions(gym.Wrapper):
     def __init__(self, env):
         super().__init__(env)
         length_action_space = len(env.action_space)
-        if (length_action_space != 1) and isinstance(env.action_space, gym.spaces.Tuple):
+        if isinstance(env.action_space, gym.spaces.Tuple):
             action_space = env.action_space[0]
 
         self._mask = np.logical_and(
@@ -47,15 +47,15 @@ class NormalizeActions(gym.Wrapper):
         self._high = np.repeat(np.where(self._mask, action_space.high, 1), length_action_space, axis=0)
         self._mask = np.repeat(self._mask, length_action_space, axis=0)
 
-        if length_action_space == 1:
-            self.action_space = gym.spaces.Box(low, high, dtype=np.float32)
-        else:
-            self.action_space = gym.spaces.Tuple(
-                [
-                    gym.spaces.Box(low, high, dtype=np.float32)
-                    for i in range(length_action_space)
-                ]
-            )
+        # if length_action_space == 1:
+        #     self.action_space = gym.spaces.Box(low, high, dtype=np.float32)
+        # else:
+        #     self.action_space = gym.spaces.Tuple(
+        #         [
+        #             gym.spaces.Box(low, high, dtype=np.float32)
+        #             for i in range(length_action_space)
+        #         ]
+        #     )
 
     def step(self, action):
         original = (action + 1) / 2 * (self._high - self._low) + self._low

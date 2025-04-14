@@ -83,15 +83,7 @@ class Vmas:
         return gym.spaces.Dict(spaces)
     @property
     def action_space(self):
-        # For continuous actions
-        if hasattr(self._env.action_space[0], "shape"):
-            low = np.concatenate([space.low for space in self._env.action_space])
-            high = np.concatenate([space.high for space in self._env.action_space])
-            return gym.spaces.Box(low, high, dtype=np.float32)
-        # For discrete actions
-        else:
-            # Return the first agent's action space as reference (all are the same)
-            return self._env.action_space[0]
+        return self._env.action_space
 
     def step(self, action):
         
