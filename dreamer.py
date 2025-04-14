@@ -195,15 +195,10 @@ class Dreamer(nn.Module):
             actions.append(agent_action.detach())
             logprobs.append(agent_logprob)
         
-        # Combine actions from all agents
-        if self._config.n_agents > 1:
-            # Combine actions based on your multi-agent environment's needs
-            # This could be concatenation, stacking, or a custom function
-            combined_action = torch.cat(actions, dim=-1)  # Assuming actions are concatenated in action space
-            combined_logprob = torch.stack(logprobs, dim=-1)
-        else:
-            combined_action = actions[0]
-            combined_logprob = logprobs[0]
+
+        combined_action = torch.cat(actions, dim=-1)  # Assuming actions are concatenated in action space
+        combined_logprob = torch.stack(logprobs, dim=-1)
+
         
         # Handle one-hot conversion if needed
         if self._config.actor["dist"] == "onehot_gumble":
