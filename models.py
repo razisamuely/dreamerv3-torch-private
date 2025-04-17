@@ -213,7 +213,7 @@ class WorldModel(nn.Module):
 
 
 class ImagBehavior(nn.Module):
-    def __init__(self, config, world_model):
+    def __init__(self, config, world_model, critic, _slow_value):
         super(ImagBehavior, self).__init__()
         self._use_amp = True if config.precision == 16 else False
         self._config = config
@@ -239,21 +239,31 @@ class ImagBehavior(nn.Module):
             outscale=config.actor["outscale"],
             name="Actor",
         )
-        self.value = networks.MLP(
-            feat_size,
-            (255,) if config.critic["dist"] == "symlog_disc" else (),
-            config.critic["layers"],
-            config.units,
-            config.act,
-            config.norm,
-            config.critic["dist"],
-            outscale=config.critic["outscale"],
-            device=config.device,
-            name="Value",
-        )
-        if config.critic["slow_target"]:
-            self._slow_value = copy.deepcopy(self.value)
-            self._updates = 0
+
+
+        # self.value = networks.MLP(
+        #     feat_size,
+        #     (255,) if config.critic["dist"] == "symlog_disc" else (),
+        #     config.critic["layers"],
+        #     config.units,
+        #     config.act,
+        #     config.norm,
+        #     config.critic["dist"],
+        #     outscale=config.critic["outscale"],
+        #     device=config.device,
+        #     name="Value",
+        # )
+        # if config.critic["slow_target"]:
+        #     self._slow_value = copy.deepcopy(self.value)
+        #     self._updates = 0
+
+        # self._value = critic
+        # self._slow_value = _slow_value
+        # if config.critic["slow_target"]:
+        #     self._updates = 0
+            
+        self.value = critic
+        self._slow_value = _slow_value
         kw = dict(wd=config.weight_decay, opt=config.opt, use_amp=self._use_amp)
         self._actor_opt = tools.Optimizer(
             "actor",
@@ -266,14 +276,14 @@ class ImagBehavior(nn.Module):
         print(
             f"Optimizer actor_opt has {sum(param.numel() for param in self.actor.parameters())} variables."
         )
-        self._value_opt = tools.Optimizer(
-            "value",
-            self.value.parameters(),
-            config.critic["lr"],
-            config.critic["eps"],
-            config.critic["grad_clip"],
-            **kw,
-        )
+        # self._value_opt = tools.Optimizer(
+        #     "value",
+        #     self.value.parameters(),
+        #     config.critic["lr"],
+        #     config.critic["eps"],
+        #     config.critic["grad_clip"],
+        #     **kw,
+        # )
         print(
             f"Optimizer value_opt has {sum(param.numel() for param in self.value.parameters())} variables."
         )
@@ -290,7 +300,7 @@ class ImagBehavior(nn.Module):
         objective,
         all_policies=None
     ):
-        self._update_slow_target()
+        # self._update_slow_target()
         metrics = {}
 
         with tools.RequiresGrad(self.actor):
@@ -315,35 +325,39 @@ class ImagBehavior(nn.Module):
                 actor_loss -= self._config.actor["entropy"] * actor_ent[:-1, ..., None]
                 actor_loss = torch.mean(actor_loss)
                 metrics.update(mets)
-                value_input = imag_feat
+                # value_input = imag_feat
 
-        with tools.RequiresGrad(self.value):
-            with torch.cuda.amp.autocast(self._use_amp):
-                value = self.value(value_input[:-1].detach())
-                target = torch.stack(target, dim=1)
-                # (time, batch, 1), (time, batch, 1) -> (time, batch)
-                value_loss = -value.log_prob(target.detach())
-                slow_target = self._slow_value(value_input[:-1].detach())
-                if self._config.critic["slow_target"]:
-                    value_loss -= value.log_prob(slow_target.mode().detach())
-                # (time, batch, 1), (time, batch, 1) -> (1,)
-                value_loss = torch.mean(weights[:-1] * value_loss[:, :, None])
+        # with tools.RequiresGrad(self.value):
+        #     with torch.cuda.amp.autocast(self._use_amp):
+        #         value = self.value(value_input[:-1].detach())
+        #         target = torch.stack(target, dim=1)
+        #         # (time, batch, 1), (time, batch, 1) -> (time, batch)
+        #         value_loss = -value.log_prob(target.detach())
+        #         slow_target = self._slow_value(value_input[:-1].detach())
+        #         if self._config.critic["slow_target"]:
+        #             value_loss -= value.log_prob(slow_target.mode().detach())
+        #         # (time, batch, 1), (time, batch, 1) -> (1,)
+        #         value_loss = torch.mean(weights[:-1] * value_loss[:, :, None])
 
-        metrics.update(tools.tensorstats(value.mode(), "value"))
-        metrics.update(tools.tensorstats(target, "target"))
-        metrics.update(tools.tensorstats(reward, "imag_reward"))
-        if self._config.actor["dist"] in ["onehot"]:
-            metrics.update(
-                tools.tensorstats(
-                    torch.argmax(imag_action, dim=-1).float(), "imag_action"
-                )
-            )
-        else:
-            metrics.update(tools.tensorstats(imag_action, "imag_action"))
-        metrics["actor_entropy"] = to_np(torch.mean(actor_ent))
+        # value = self.value(imag_feat.detach())
+        # metrics.update(tools.tensorstats(value.mode(), "value"))
+    
+        # metrics.update(tools.tensorstats(target, "target"))
+        # metrics.update(tools.tensorstats(reward, "imag_reward"))
+
+        # if self._config.actor["dist"] in ["onehot"]:
+        #     metrics.update(
+        #         tools.tensorstats(
+        #             torch.argmax(imag_action, dim=-1).float(), "imag_action"
+        #         )
+        #     )
+        # else:
+        #     metrics.update(tools.tensorstats(imag_action, "imag_action"))
+        # metrics["actor_entropy"] = to_np(torch.mean(actor_ent))
         with tools.RequiresGrad(self):
             metrics.update(self._actor_opt(actor_loss, self.actor.parameters()))
-            metrics.update(self._value_opt(value_loss, self.value.parameters()))
+            # metrics.update(self._value_opt(value_loss, self.value.parameters()))
+            
         return imag_feat, imag_state, imag_action, weights, metrics
 
     def _imagine(self, start, policy, horizon, all_policies=None):
@@ -468,3 +482,40 @@ class ImagBehavior(nn.Module):
                 for s, d in zip(self.value.parameters(), self._slow_value.parameters()):
                     d.data = mix * s.data + (1 - mix) * d.data
             self._updates += 1
+
+    
+    def _generate_imagination_data(self, start, objective, all_policies=None):
+        """
+        Generate imagination data without updating agent parameters.
+        
+        Args:
+            start: Initial latent state
+            objective: Reward function
+            all_policies: List of all agent policies
+            
+        Returns:
+            Tuple of (features, states, actions, weights, metrics)
+        """
+        metrics = {}
+        
+        # Generate imagination rollouts
+        imag_feat, imag_state, imag_action = self._imagine(
+            start, self.actor, self._config.imag_horizon, all_policies
+        )
+        
+        # Compute rewards
+        reward = objective(imag_feat, imag_state, imag_action)
+        
+        # Compute targets and weights
+        target, weights, base = self._compute_target(
+            imag_feat, imag_state, reward
+        )
+        
+        # Record some metrics
+        value = self.value(imag_feat.detach())
+        metrics.update(tools.tensorstats(value.mode(), "value"))
+        target_stacked = torch.stack(target, dim=1)
+        metrics.update(tools.tensorstats(target_stacked, "target"))
+        metrics.update(tools.tensorstats(reward, "imag_reward"))
+        
+        return imag_feat, imag_state, imag_action, weights, metrics
