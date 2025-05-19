@@ -233,7 +233,7 @@ def simulate(
 
                     score = sum(eval_scores) / len(eval_scores)
                     length = sum(eval_lengths) / len(eval_lengths)
-                    logger.video(f"eval_policy", np.array(video)[None])
+                    logger.video(f"eval_policy_{i}", np.array(video)[None])
 
                     if len(eval_scores) >= episodes and not eval_done:
                         logger.scalar(f"eval_return", score)
