@@ -1,8 +1,10 @@
+import networks
 import argparse
 import functools
 import os
 import pathlib
 import sys
+import copy
 
 os.environ["MUJOCO_GL"] = "osmesa"
 
@@ -87,12 +89,58 @@ class Dreamer(nn.Module):
         self._step = logger.step // config.action_repeat
         self._update_count = 0
         self._dataset = dataset
+
+        self._use_amp = True if config.precision == 16 else False
         
         # Init the world model
         self._wm = models.WorldModel(obs_space, act_space, self._step, config)
 
-        # Init the task behavior
-        self._task_behaviors = [models.ImagBehavior(config, self._wm) for _ in range(config.n_agents)]
+        # # Init the task behavior
+        # self._task_behaviors = [models.ImagBehavior(config, self._wm) for _ in range(config.n_agents)]
+
+        # Create a single shared critic
+        if config.dyn_discrete:
+            feat_size = config.dyn_stoch * config.dyn_discrete + config.dyn_deter
+        else:
+            feat_size = config.dyn_stoch + config.dyn_deter
+        
+        self.critic = networks.MLP(
+            feat_size,
+            (255,) if config.critic["dist"] == "symlog_disc" else (),
+            config.critic["layers"],
+            config.units,
+            config.act,
+            config.norm,
+            config.critic["dist"],
+            outscale=config.critic["outscale"],
+            device=config.device,
+            name="SharedValue",
+        )
+        
+        # Critic optimizer
+        self._value_opt = tools.Optimizer(
+            "shared_value",
+            self.critic.parameters(),
+            config.critic["lr"],
+            config.critic["eps"],
+            config.critic["grad_clip"],
+            wd=config.weight_decay,
+            opt=config.opt,
+            use_amp=self._use_amp,
+        )
+        
+        if config.critic["slow_target"]:
+            self._slow_critic = copy.deepcopy(self.critic)
+            self._updates = 0
+
+        # Create a modified ImagBehavior that uses the shared critic
+        self._task_behaviors = [
+            models.ImagBehavior(
+                config, self._wm, self.critic, self._slow_critic
+            ) 
+            for _ in range(config.n_agents)
+        ]
+
 
         # Model compilation
         if (config.compile and os.name != "nt"):
@@ -236,7 +284,23 @@ class Dreamer(nn.Module):
         
         # Train each agent's actor-critic separately
         all_policy_actors = [behavior.actor for behavior in self._task_behaviors]
- 
+
+        # TODO : combine data from all agents
+        combined_imag_feat, combined_imag_state, combined_imag_action, combined_weights = self._collect_imagination_data(
+        start, reward, all_policy_actors
+    )
+        
+        critic_metrics = self._train_shared_critic(
+            combined_imag_feat, 
+            combined_imag_state, 
+            combined_imag_action, 
+            combined_weights, 
+            reward
+        )
+        metrics.update(critic_metrics)
+
+
+
         for agent_idx, behavior in enumerate(self._task_behaviors):
             # Train current agent's policy using the shared world model
             _, _, _, _, agent_metrics = behavior._train(start, reward, all_policy_actors)
@@ -266,6 +330,121 @@ class Dreamer(nn.Module):
                 self._metrics[name].append(value)
                 
         return metrics
+    
+    def _collect_imagination_data(self, start, reward, all_policy_actors):
+        """
+        Collect and combine imagination data from all agents.
+        
+        Args:
+            start: Initial latent state
+            reward: Reward function
+            all_policy_actors: List of all agent policies
+            
+        Returns:
+            Tuple of combined (features, states, actions, weights)
+        """
+        # Collect imagination data from all agents
+        all_imag_feats = []
+        all_imag_states = []
+        all_imag_actions = []
+        all_weights = []
+
+        for agent_idx, behavior in enumerate(self._task_behaviors):
+            # Generate imagination data for each agent
+            imag_feat, imag_state, imag_action, weights, _ = behavior._generate_imagination_data(
+                start, reward, all_policy_actors
+            )
+            
+            all_imag_feats.append(imag_feat)
+            all_imag_states.append(imag_state)
+            all_imag_actions.append(imag_action)
+            all_weights.append(weights)
+
+        # Stack or combine the data
+        # For feats and actions, you can just concatenate along the batch dimension
+        combined_imag_feat = torch.cat(all_imag_feats, dim=1)  # Concatenate batch dimension
+        combined_imag_action = torch.cat(all_imag_actions, dim=1)
+
+        # For states (which are dictionaries), you need to combine each key
+        combined_imag_state = {}
+        for key in all_imag_states[0].keys():
+            combined_imag_state[key] = torch.cat([s[key] for s in all_imag_states], dim=1)
+
+        # For weights, just concatenate
+        combined_weights = torch.cat(all_weights, dim=1)
+        
+        return combined_imag_feat, combined_imag_state, combined_imag_action, combined_weights
+
+    def _train_shared_critic(self, imag_feat, imag_state, imag_action, weights, reward):
+        """
+        Train the shared critic using imagined trajectory data.
+        
+        Args:
+            imag_feat: Features from imagined trajectories
+            imag_state: States from imagined trajectories
+            imag_action: Actions from imagined trajectories
+            weights: Importance weights
+            reward: Reward function
+            
+        Returns:
+            dict: Training metrics
+        """
+        metrics = {}
+        
+        # Compute target values
+        # This is the same calculation as in ImagBehavior._compute_target
+        if "cont" in self._wm.heads:
+            inp = self._wm.dynamics.get_feat(imag_state)
+            discount = self._config.discount * self._wm.heads["cont"](inp).mean
+        else:
+            discount = self._config.discount * torch.ones_like(reward(imag_feat, imag_state, imag_action))
+        
+        value = self.critic(imag_feat).mode()
+        reward_value = reward(imag_feat, imag_state, imag_action)
+        
+        target = tools.lambda_return(
+            reward_value[1:],
+            value[:-1],
+            discount[1:],
+            bootstrap=value[-1],
+            lambda_=self._config.discount_lambda,
+            axis=0,
+        )
+        
+        # Train critic using the same logic as in the original code
+        with tools.RequiresGrad(self.critic):
+            with torch.cuda.amp.autocast(self._use_amp):
+                value = self.critic(imag_feat[:-1].detach())
+                target_stacked = torch.stack(target, dim=1)
+                # (time, batch, 1), (time, batch, 1) -> (time, batch)
+                value_loss = -value.log_prob(target_stacked.detach())
+                
+                if self._config.critic["slow_target"]:
+                    slow_target = self._slow_critic(imag_feat[:-1].detach())
+                    value_loss -= value.log_prob(slow_target.mode().detach())
+                    
+                # (time, batch, 1), (time, batch, 1) -> (1,)
+                value_loss = torch.mean(weights[:-1] * value_loss[:, :, None])
+        
+        # Update critic
+        metrics.update(tools.tensorstats(value.mode(), "shared_value"))
+        metrics.update(tools.tensorstats(target_stacked, "shared_target"))
+        metrics.update(self._value_opt(value_loss, self.critic.parameters()))
+        
+        # Update slow target if needed
+        if self._config.critic["slow_target"]:
+            self._update_slow_target_critic()
+        
+        return metrics
+    
+    def _update_slow_target_critic(self):
+        """Update the slow-moving target critic network."""
+        if self._config.critic["slow_target"]:
+            if self._updates % self._config.critic["slow_target_update"] == 0:
+                mix = self._config.critic["slow_target_fraction"]
+                for s, d in zip(self.critic.parameters(), self._slow_critic.parameters()):
+                    d.data = mix * s.data + (1 - mix) * d.data
+            self._updates += 1
 
 
 def count_steps(folder):
