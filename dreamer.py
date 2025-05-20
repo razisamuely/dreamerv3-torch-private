@@ -515,6 +515,13 @@ def make_env(config, mode, id):
                 n_agents=config.n_agents
             )
             print(env.action_space)
+        elif "balance" in task:
+            from envs.vmas_balance import VmasBalance
+            env = VmasBalance(
+                task, config.action_repeat, config.size, seed=config.seed + id, device=config.device,
+                n_agents=config.n_agents
+            )
+            print(env.action_space)
         elif "navigation" in task:
             from envs.vmas_navigation import VmasNavigationEnv
             n_agents = getattr(config, 'n_agents', 1)
@@ -747,3 +754,4 @@ if __name__ == "__main__":
 # python dreamer.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread
 # python dreamer.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread
 # python dreamer.py --configs vmas --task vmas_navigation --logdir ./logdir/vmas_navigation
+# python dreamer.py --configs vmas --task vmas_balance --logdir ./logdir/vmas_balance
