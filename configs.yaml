@@ -21,7 +21,7 @@ defaults:
 
   # Environment
   task: 'vmas_balance'
-  size: [80, 80]
+  size: [64, 46]
   envs: 1
   action_repeat: 2
   time_limit: 1000

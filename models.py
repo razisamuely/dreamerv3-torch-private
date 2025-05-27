@@ -241,26 +241,6 @@ class ImagBehavior(nn.Module):
         )
 
 
-        # self.value = networks.MLP(
-        #     feat_size,
-        #     (255,) if config.critic["dist"] == "symlog_disc" else (),
-        #     config.critic["layers"],
-        #     config.units,
-        #     config.act,
-        #     config.norm,
-        #     config.critic["dist"],
-        #     outscale=config.critic["outscale"],
-        #     device=config.device,
-        #     name="Value",
-        # )
-        # if config.critic["slow_target"]:
-        #     self._slow_value = copy.deepcopy(self.value)
-        #     self._updates = 0
-
-        # self._value = critic
-        # self._slow_value = _slow_value
-        # if config.critic["slow_target"]:
-        #     self._updates = 0
             
         self.value = critic
         self._slow_value = _slow_value
@@ -276,14 +256,6 @@ class ImagBehavior(nn.Module):
         print(
             f"Optimizer actor_opt has {sum(param.numel() for param in self.actor.parameters())} variables."
         )
-        # self._value_opt = tools.Optimizer(
-        #     "value",
-        #     self.value.parameters(),
-        #     config.critic["lr"],
-        #     config.critic["eps"],
-        #     config.critic["grad_clip"],
-        #     **kw,
-        # )
         print(
             f"Optimizer value_opt has {sum(param.numel() for param in self.value.parameters())} variables."
         )
@@ -327,33 +299,6 @@ class ImagBehavior(nn.Module):
                 metrics.update(mets)
                 # value_input = imag_feat
 
-        # with tools.RequiresGrad(self.value):
-        #     with torch.cuda.amp.autocast(self._use_amp):
-        #         value = self.value(value_input[:-1].detach())
-        #         target = torch.stack(target, dim=1)
-        #         # (time, batch, 1), (time, batch, 1) -> (time, batch)
-        #         value_loss = -value.log_prob(target.detach())
-        #         slow_target = self._slow_value(value_input[:-1].detach())
-        #         if self._config.critic["slow_target"]:
-        #             value_loss -= value.log_prob(slow_target.mode().detach())
-        #         # (time, batch, 1), (time, batch, 1) -> (1,)
-        #         value_loss = torch.mean(weights[:-1] * value_loss[:, :, None])
-
-        # value = self.value(imag_feat.detach())
-        # metrics.update(tools.tensorstats(value.mode(), "value"))
-    
-        # metrics.update(tools.tensorstats(target, "target"))
-        # metrics.update(tools.tensorstats(reward, "imag_reward"))
-
-        # if self._config.actor["dist"] in ["onehot"]:
-        #     metrics.update(
-        #         tools.tensorstats(
-        #             torch.argmax(imag_action, dim=-1).float(), "imag_action"
-        #         )
-        #     )
-        # else:
-        #     metrics.update(tools.tensorstats(imag_action, "imag_action"))
-        # metrics["actor_entropy"] = to_np(torch.mean(actor_ent))
         with tools.RequiresGrad(self):
             metrics.update(self._actor_opt(actor_loss, self.actor.parameters()))
             # metrics.update(self._value_opt(value_loss, self.value.parameters()))

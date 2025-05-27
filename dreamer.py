@@ -752,6 +752,5 @@ if __name__ == "__main__":
 
 # python dreamer.py --configs vmas --task vmas_simple --logdir ./logdir/vmas_simple
 # python dreamer.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread
-# python dreamer.py --configs vmas --task vmas_simple_spread --logdir ./logdir/vmas_simple_spread
 # python dreamer.py --configs vmas --task vmas_navigation --logdir ./logdir/vmas_navigation
 # python dreamer.py --configs vmas --task vmas_balance --logdir ./logdir/vmas_balance
