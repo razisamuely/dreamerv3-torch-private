@@ -64,3 +64,10 @@ This code is heavily inspired by the following works:
 - jsikyoon's Dreamer-v2 pytorch : https://github.com/jsikyoon/dreamer-torch
 - RajGhugare19's Dreamer-v2 pytorch : https://github.com/RajGhugare19/dreamerv2
 - denisyarats's DrQ-v2 original : https://github.com/facebookresearch/drqv2
+
+# TODO
+- Heavy refactor 
+- Add explentation for vanila dreamers and mamba 
+- Run on more enviroenmnt 
+- explain current is not collaborate 
+- Add link to presentation 
