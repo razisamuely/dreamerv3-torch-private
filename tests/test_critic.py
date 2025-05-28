@@ -3,136 +3,113 @@ import gym.spaces
 import torch
 import numpy as np
 from pathlib import Path
-import envs.wrappers as wrappers
 import sys
-import yaml
 import pathlib
-import gym 
-import networks
-from tools import Logger, load_episodes, args_type
-sys.path.append(str(Path(__file__).parent.parent))
-from dreamer import Dreamer, count_steps, make_dataset,make_env
-import yaml
-import pathlib
-import types
-import sys
-import os
-from tests.utils import load_config
-from parallel import Parallel, Damy
-import cv2
-import time 
 import random
-import unittest
 
+sys.path.append(str(Path(__file__).parent.parent))
+from dreamer import Dreamer, count_steps, make_env
+from tests.utils import load_config
+from parallel import Damy
+from tools import Logger
+import networks
 
-# train_envs[0].action_space Box(-1.0, 1.0, (8,), float32)
-ACTION_SPACE = gym.spaces.Box(low = -1,high = 1, shape = (8,), dtype=np.float32)
+# Constants
+NUM_AGENTS = 4
+AGENT_OBS_SIZE = 18
+IMAGE_SHAPE = (64, 64, 3)
+ACTION_SPACE_SIZE = 8
+CRITIC_OUTPUT_SIZE = 255
+AGENT_OBS_KEYS = [f'agent{i}_obs' for i in range(NUM_AGENTS)]
+BOOLEAN_KEYS = ['is_first', 'is_last', 'is_terminal']
+
+ACTION_SPACE = gym.spaces.Box(low=-1, high=1, shape=(ACTION_SPACE_SIZE,), dtype=np.float32)
 OBSERVATION_SPACE = gym.spaces.Dict({
-    'agent0_obs': gym.spaces.Box(low=-np.inf, high=np.inf, shape=(18,), dtype=np.float32), # Agent i
-    'agent1_obs': gym.spaces.Box(low=-np.inf, high=np.inf, shape=(18,), dtype=np.float32), # Agent i
-    'agent2_obs': gym.spaces.Box(low=-np.inf, high=np.inf, shape=(18,), dtype=np.float32), # Agent i
-    'agent3_obs': gym.spaces.Box(low=-np.inf, high=np.inf, shape=(18,), dtype=np.float32), # Agent i
-    'image': gym.spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8), # Image observation
-    'is_first': gym.spaces.Discrete(2), # Boolean indicating if it's the first step
-    'is_last': gym.spaces.Discrete(2), # Boolean indicating if it's the last step
-    'is_terminal': gym.spaces.Discrete(2) # Boolean indicating if it's a terminal state
+    **{key: gym.spaces.Box(low=-np.inf, high=np.inf, shape=(AGENT_OBS_SIZE,), dtype=np.float32) 
+       for key in AGENT_OBS_KEYS},
+    'image': gym.spaces.Box(low=0, high=255, shape=IMAGE_SHAPE, dtype=np.uint8),
+    **{key: gym.spaces.Discrete(2) for key in BOOLEAN_KEYS}
 })
 
 
 class TestMultiAgentDreamer(unittest.TestCase):
 
     def setUp(self):
-        self.configs = load_config()
-        self.configs.logdir =  str(pathlib.Path(__file__).parent.parent / "logs")
-
-        logdir = pathlib.Path(self.configs.logdir).expanduser()
-
-        # Parse arguments (if any) and override defaults
-        self.configs.traindir = self.configs.traindir or logdir / "train_eps"
-                    
-        # Set up Logger
-        step = count_steps(self.configs.traindir)
-        self.logger =  Logger(logdir, self.configs.action_repeat * step)
-
-        # Set up dataset
-        directory = self.configs.traindir
-        train_eps =  load_episodes(directory, limit=self.configs.dataset_size)
-        self.train_dataset = make_dataset(train_eps, self.configs)
-        self.train_dataset = self._create_mock_dataset()
-
-        # Set up environments - make env is a function that creates the environment
-        make = lambda mode, id: make_env(self.configs, mode, id)
-        self.train_envs = [Damy(make("train", i)) for i in range(self.configs.envs)]
-
-        # Set up action and observation spaces
-        acts = self.train_envs[0].action_space[0]
-        self.configs.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
+        self.config = load_config()
+        self.config.logdir = str(pathlib.Path(__file__).parent.parent / "logs")
         
-        # Set up observation shape
+        logdir = pathlib.Path(self.config.logdir).expanduser()
+        self.config.traindir = self.config.traindir or logdir / "train_eps"
+        
+        step = count_steps(self.config.traindir)
+        logger = Logger(logdir, self.config.action_repeat * step)
+        
+        train_dataset = self._create_mock_dataset()
+        
+        make_env_fn = lambda mode, id: make_env(self.config, mode, id)
+        train_envs = [Damy(make_env_fn("train", i)) for i in range(self.config.envs)]
+        
+        acts = train_envs[0].action_space[0]
+        self.config.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
+        
         self.agent = Dreamer(
-            obs_space = OBSERVATION_SPACE, 
-            act_space = ACTION_SPACE,
-            config = self.configs,
-            logger = self.logger, 
-            dataset = self.train_dataset
+            obs_space=OBSERVATION_SPACE,
+            act_space=ACTION_SPACE,
+            config=self.config,
+            logger=logger,
+            dataset=train_dataset
         )
 
-        if self.configs.dyn_discrete:
-            self._feat_size = self.configs.dyn_stoch * self.configs.dyn_discrete + self.configs.dyn_deter
+        if self.config.dyn_discrete:
+            feat_size = self.config.dyn_stoch * self.config.dyn_discrete + self.config.dyn_deter
         else:
-            self._feat_size = self.configs.dyn_stoch + self.configs.dyn_deter
+            feat_size = self.config.dyn_stoch + self.config.dyn_deter
 
         self.critic = networks.MLP(
-            self._feat_size,
-            (255,) if self.configs.critic["dist"] == "symlog_disc" else (),
-            self.configs.critic["layers"],
-            self.configs.units,
-            self.configs.act,
-            self.configs.norm,
-            self.configs.critic["dist"],
-            outscale=self.configs.critic["outscale"],
-            device=self.configs.device,
+            feat_size,
+            (CRITIC_OUTPUT_SIZE,) if self.config.critic["dist"] == "symlog_disc" else (),
+            self.config.critic["layers"],
+            self.config.units,
+            self.config.act,
+            self.config.norm,
+            self.config.critic["dist"],
+            outscale=self.config.critic["outscale"],
+            device=self.config.device,
             name="SharedValue",
         )
+        
+        self.feat_size = feat_size
 
     def _create_mock_dataset(self):
-        """Create a mock dataset that yields fake batches indefinitely."""
         def generator():
             while True:
-                # Create batch with proper dimensions
                 batch = {
-                    'agent0_obs': torch.zeros((self.configs.batch_size, self.configs.batch_length, 18)),
-                    'agent1_obs': torch.zeros((self.configs.batch_size, self.configs.batch_length, 18)),
-                    'agent2_obs': torch.zeros((self.configs.batch_size, self.configs.batch_length, 18)),
-                    'agent3_obs': torch.zeros((self.configs.batch_size, self.configs.batch_length, 18)),
-                    'image': torch.zeros((self.configs.batch_size, self.configs.batch_length, 64, 64, 3)),
-                    'action': torch.zeros((self.configs.batch_size, self.configs.batch_length, self.configs.num_actions * self.configs.n_agents)),
-                    'reward': torch.zeros((self.configs.batch_size, self.configs.batch_length)),
-                    'discount': torch.ones((self.configs.batch_size, self.configs.batch_length)),
-                    'is_first': torch.zeros((self.configs.batch_size, self.configs.batch_length), dtype=torch.bool),
-                    'is_terminal': torch.zeros((self.configs.batch_size, self.configs.batch_length), dtype=torch.bool)
+                    **{key: torch.zeros((self.config.batch_size, self.config.batch_length, AGENT_OBS_SIZE)) 
+                       for key in AGENT_OBS_KEYS},
+                    'image': torch.zeros((self.config.batch_size, self.config.batch_length, *IMAGE_SHAPE)),
+                    'action': torch.zeros((self.config.batch_size, self.config.batch_length, 
+                                         self.config.num_actions * self.config.n_agents)),
+                    'reward': torch.zeros((self.config.batch_size, self.config.batch_length)),
+                    'discount': torch.ones((self.config.batch_size, self.config.batch_length)),
+                    'is_first': torch.zeros((self.config.batch_size, self.config.batch_length), dtype=torch.bool),
+                    'is_terminal': torch.zeros((self.config.batch_size, self.config.batch_length), dtype=torch.bool)
                 }
                 yield batch
-        
         return generator()
-    
 
-
-
-    def test_critic_forward(self):
-        # Create a dummy batch with the correct dimensions
-        # random [15, 1024, 1536]
-        image_feat = torch.randn((self.configs.imag_horizon, 
-                                  random.randint(1, 10),
-                                  self._feat_size ))
-        output = self.critic(image_feat)
-        print("Output shape:", output.logits.shape, output.probs.shape, output.buckets.shape )
-
-        #  output.logits.shape, output.probs.shape, output.buckets.shape 
-        #  (torch.Size([15, 1024, 255]), torch.Size([15, 1024, 255]), torch.Size([255]))
-        #  Check output shape
-        expected_shape = (self.configs.batch_size, self.configs.critic["layers"][-1])
-        assert output.shape == expected_shape, f"Expected output shape {expected_shape}, but got {output.shape}"
+    def test_critic_forward_pass(self):
+        batch_size = random.randint(1, 10)
+        features = torch.randn((self.config.imag_horizon, batch_size, self.feat_size))
+        
+        output = self.critic(features)
+        
+        expected_logits_shape = (self.config.imag_horizon, batch_size, CRITIC_OUTPUT_SIZE)
+        expected_probs_shape = (self.config.imag_horizon, batch_size, CRITIC_OUTPUT_SIZE)
+        expected_buckets_shape = (CRITIC_OUTPUT_SIZE,)
+        
+        assert output.logits.shape == expected_logits_shape
+        assert output.probs.shape == expected_probs_shape
+        assert output.buckets.shape == expected_buckets_shape
 
 
 if __name__ == "__main__":
